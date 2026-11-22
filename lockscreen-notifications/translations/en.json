@@ -1,0 +1,84 @@
+{
+  "notify": {
+    "error": "Something went wrong. Check the Noctalia log for details."
+  },
+  "settings": {
+    "max_items": {
+      "label": "Max items shown",
+      "description": "Maximum number of notifications listed on the widget."
+    },
+    "group_notifications": {
+      "label": "Group by sender",
+      "description": "Merge notifications with the same app and title into one card with a count badge. Turn off to give every notification its own card."
+    },
+    "show_icons": {
+      "label": "Show app icons",
+      "description": "Show the sender icon, or the image the app provided, at the start of each card."
+    },
+    "show_age": {
+      "label": "Show age",
+      "description": "Show how long ago each notification arrived, on the right of the card."
+    },
+    "summary_length": {
+      "label": "Title length",
+      "description": "How many characters of the title are shown before truncation. It also fixes the widget width: longer text, wider widget.",
+      "short": "Short (40)",
+      "normal": "Normal (60)",
+      "long": "Long (90)"
+    },
+    "card_background": {
+      "label": "Card background",
+      "description": "How strong the rounded background behind each notification is.",
+      "subtle": "Subtle",
+      "solid": "Solid",
+      "glass": "Liquid glass",
+      "none": "None"
+    },
+    "preview_when_empty": {
+      "label": "Preview sample notifications",
+      "description": "Show as many invented example cards as Max items shown when the list is empty, so the widget can be positioned without waiting for real notifications. The header is marked Preview and the first card explains how to turn it off. It stays on until disabled."
+    },
+    "show_body": {
+      "label": "Show body",
+      "description": "Show the notification body under each summary line."
+    },
+    "language": {
+      "label": "Language",
+      "description": "Language of the widget texts. Auto follows Noctalia's resolved language (system locale). This page's labels follow the shell language instead.",
+      "auto": "Auto",
+      "en": "English",
+      "it": "Italiano"
+    },
+    "order": {
+      "label": "Order",
+      "description": "Newest notifications at the top, or keep arrival order (oldest first).",
+      "newest": "Newest first",
+      "oldest": "Oldest first"
+    },
+    "age_format": {
+      "label": "Age format",
+      "description": "How each entry's age is shown.",
+      "relative": "Relative (2 hours ago)",
+      "absolute": "Absolute (18:42)",
+      "both": "Both (2 hours ago · 18:42)"
+    }
+  },
+  "widget": {
+    "header": "%d unread notifications",
+    "header_one": "1 unread notification",
+    "more": "+ %d more",
+    "empty": "No notifications",
+    "preview": "Preview",
+    "preview_app": "Lockscreen Notifications",
+    "preview_title": "Test notification",
+    "preview_body": "Preview only. Disable it in the plugin settings.",
+    "count": "(%d)",
+    "age_now": "just now",
+    "age_min_one": "1 minute ago",
+    "age_min": "%d minutes ago",
+    "age_hour_one": "1 hour ago",
+    "age_hour": "%d hours ago",
+    "age_day_one": "1 day ago",
+    "age_day": "%d days ago"
+  }
+}

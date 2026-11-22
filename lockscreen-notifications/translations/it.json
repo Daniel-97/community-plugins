@@ -1,0 +1,84 @@
+{
+  "notify": {
+    "error": "Qualcosa è andato storto. Controlla il log di Noctalia per i dettagli."
+  },
+  "settings": {
+    "max_items": {
+      "label": "Elementi mostrati",
+      "description": "Numero massimo di notifiche elencate nel widget."
+    },
+    "group_notifications": {
+      "label": "Raggruppa per mittente",
+      "description": "Unisce le notifiche con stessa app e stesso titolo in una card con badge. Disattivalo per dare a ogni notifica una card separata."
+    },
+    "show_icons": {
+      "label": "Mostra icone app",
+      "description": "Mostra l'icona del mittente, o l'immagine fornita dall'app, all'inizio di ogni card."
+    },
+    "show_age": {
+      "label": "Mostra età",
+      "description": "Mostra da quanto tempo è arrivata ogni notifica, a destra della card."
+    },
+    "summary_length": {
+      "label": "Lunghezza titolo",
+      "description": "Quanti caratteri del titolo mostrare prima del troncamento. Fissa anche la larghezza del widget: testo più lungo, widget più largo.",
+      "short": "Corto (40)",
+      "normal": "Normale (60)",
+      "long": "Lungo (90)"
+    },
+    "card_background": {
+      "label": "Sfondo card",
+      "description": "Quanto è marcato lo sfondo arrotondato dietro ogni notifica.",
+      "subtle": "Sfumato",
+      "solid": "Pieno",
+      "glass": "Vetro liquido",
+      "none": "Nessuno"
+    },
+    "preview_when_empty": {
+      "label": "Anteprima di esempio",
+      "description": "Mostra tante card d'esempio inventate quanti sono gli Elementi mostrati, quando la lista è vuota, così puoi posizionare il widget senza aspettare notifiche reali. L'intestazione è marcata Anteprima e la prima card spiega come disattivarla. Resta attiva finché non la disattivi."
+    },
+    "show_body": {
+      "label": "Mostra il corpo",
+      "description": "Mostra il corpo della notifica sotto ogni titolo."
+    },
+    "language": {
+      "label": "Lingua",
+      "description": "Lingua dei testi del widget. Auto segue la lingua risolta da Noctalia (locale di sistema). Le etichette di questa pagina seguono invece la lingua della shell.",
+      "auto": "Auto",
+      "en": "English",
+      "it": "Italiano"
+    },
+    "order": {
+      "label": "Ordine",
+      "description": "Notifiche più recenti in cima, oppure ordine di arrivo (più vecchie prima).",
+      "newest": "Più recenti prima",
+      "oldest": "Più vecchie prima"
+    },
+    "age_format": {
+      "label": "Formato età",
+      "description": "Come mostrare l'età di ogni voce.",
+      "relative": "Relativa (2 ore fa)",
+      "absolute": "Assoluta (18:42)",
+      "both": "Entrambe (2 ore fa · 18:42)"
+    }
+  },
+  "widget": {
+    "header": "%d notifiche non lette",
+    "header_one": "Una notifica non letta",
+    "more": "+ altre %d",
+    "empty": "Nessuna notifica",
+    "preview": "Anteprima",
+    "preview_app": "Notifiche lockscreen",
+    "preview_title": "Notifica di prova",
+    "preview_body": "Solo anteprima. Disattivala nelle impostazioni del plugin.",
+    "count": "(%d)",
+    "age_now": "adesso",
+    "age_min_one": "1 minuto fa",
+    "age_min": "%d minuti fa",
+    "age_hour_one": "1 ora fa",
+    "age_hour": "%d ore fa",
+    "age_day_one": "1 giorno fa",
+    "age_day": "%d giorni fa"
+  }
+}
