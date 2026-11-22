@@ -479,7 +479,11 @@ end
 
 function update()
   noctalia.setUpdateInterval(2000)
-  centerOpenPoll()
+  -- The control center poll spawns a short-lived `noctalia msg status`
+  -- process; skip it while there is nothing to clear.
+  if #items > 0 then
+    centerOpenPoll()
+  end
   watchdogCheck()
 end
 

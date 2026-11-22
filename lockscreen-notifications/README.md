@@ -81,6 +81,10 @@ These are hidden behind **Show advanced** in the plugin settings.
   contact names) never touches the disk, so service restarts (plugin
   reloads, settings changes) start from an empty list. Privacy over
   continuity.
+- The control center opening is detected by polling `noctalia msg status`
+  every 2 s, but only while the list has entries; the shell exposes no
+  panel-open event to plugins. Besides `dbus-monitor` and the `pgrep`
+  watchdog, this is the only process the service spawns.
 - App icons are resolved through `noctalia.appIconPath` (desktop-entry
   hint, then the notification's `app_icon`, then the app name); unknown
   senders get a generic glyph. Apps that send an `image-path` hint get
