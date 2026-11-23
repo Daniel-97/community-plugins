@@ -226,6 +226,9 @@ end
 -- desktop-entry, urgency and transient declarations already collected.
 local function flushNotify()
   if msgKind ~= "notify" or #nStrings < 4 then
+    if msgKind == "notify" then
+      diag("flush incomplete strings=" .. tostring(#nStrings) .. " serial=" .. tostring(pendingSerial))
+    end
     return
   end
   msgKind = nil
@@ -237,7 +240,10 @@ local function flushNotify()
     nStrings[1] or "", nStrings[2] or "", nStrings[3] or "", nStrings[4] or "",
     hintDesktop, hintUrgent, hintImagePath)
   if item and pendingSerial then
+    diag("remember serial=" .. tostring(pendingSerial) .. " sender=" .. tostring(pendingSender))
     rememberSerial(pendingSerial, item)
+  else
+    diag("flush no item/serial item=" .. tostring(item ~= nil) .. " serial=" .. tostring(pendingSerial))
   end
 end
 
@@ -257,6 +263,9 @@ local function resetMsg()
   hintUrgent = false
   hintTransient = false
   hintImagePath = nil
+  pendingSerial = nil
+  pendingSender = nil
+  pendingReplyKey = nil
 end
 
 -- Known hint keys we care about, in the hints dict after the body.
@@ -276,6 +285,15 @@ local function hintKeyFor(line)
   return nil
 end
 
+-- A real dbus-monitor message header always includes "time=". Requiring it
+-- keeps continuation lines of multi-line strings (which start at column 1
+-- and may begin with words like "signal" or "error") from being mistaken
+-- for new messages and aborting the Notify before its id is correlated.
+local function isHeader(line)
+  return line:find("^method call time=") or line:find("^method return time=")
+    or line:find("^signal time=") or line:find("^error time=")
+end
+
 local function handleNotifyLine(line)
   -- A string value containing newlines is printed across several physical
   -- lines by dbus-monitor. Keep consuming until the closing quote: without
@@ -285,9 +303,8 @@ local function handleNotifyLine(line)
     -- A new message header (or an absurdly long string) means the
     -- previous string was malformed or truncated. Drop it instead of
     -- swallowing every following message, including close signals.
-    local header = line:find("^method call time=") or line:find("^method return time=")
-      or line:find("^signal time=") or line:find("^error time=")
-    if header or #plainStringBuf > 1048576 then
+    if isHeader(line) or #plainStringBuf > 1048576 then
+      diag("string buffer dropped len=" .. tostring(#plainStringBuf))
       plainStringBuf = nil
       resetMsg()
     else
@@ -307,26 +324,27 @@ local function handleNotifyLine(line)
   end
 
   -- Header classification (order matters: specific members first).
-  if line:find("member=Notify", 1, true) then
+  if line:find("^method call time=") and line:find("member=Notify", 1, true) then
     resetMsg()
     msgKind = "notify"
     pendingSerial = tonumber(line:match("serial=(%d+)"))
     pendingSender = line:match("sender=([^ ]+)") or ""
+    diag("Notify serial=" .. tostring(pendingSerial) .. " sender=" .. tostring(pendingSender))
     return
   end
-  if line:find("member=CloseNotification", 1, true) then
+  if line:find("^method call time=") and line:find("member=CloseNotification", 1, true) then
     resetMsg()
     msgKind = "closecall"
     diag("CloseNotification method call")
     return
   end
-  if line:find("member=NotificationClosed", 1, true) then
+  if line:find("^signal time=") and line:find("member=NotificationClosed", 1, true) then
     resetMsg()
     msgKind = "closed"
     diag("NotificationClosed signal")
     return
   end
-  if line:find("^method return") then
+  if line:find("^method return time=") then
     local rs = tonumber(line:match("reply_serial=(%d+)"))
     local dest = line:match("destination=([^ ]+)") or ""
     resetMsg()
@@ -335,13 +353,15 @@ local function handleNotifyLine(line)
     -- return names the original caller as its destination, which pairs
     -- with the call's sender to key the pending map.
     local key = dest .. "/" .. tostring(rs)
-    if rs and pendingBySerial[key] then
+    local pending = pendingBySerial[key]
+    diag("return key=" .. key .. " pending=" .. tostring(pending ~= nil))
+    if rs and pending then
       msgKind = "return"
       pendingReplyKey = key
     end
     return
   end
-  if line:find("^method call") or line:find("^signal") or line:find("^error") then
+  if isHeader(line) then
     resetMsg()
     return
   end
@@ -367,6 +387,7 @@ local function handleNotifyLine(line)
     local v = line:match("^%s*uint32%s+(%d+)%s*$")
     if v then
       msgKind = nil
+      diag("CloseNotification id=" .. tostring(v))
       handleClosed(tonumber(v), 3)
     end
     return
@@ -377,6 +398,7 @@ local function handleNotifyLine(line)
       table.insert(closedValues, tonumber(v))
       if #closedValues == 2 then
         msgKind = nil
+        diag("NotificationClosed id=" .. tostring(closedValues[1]) .. " reason=" .. tostring(closedValues[2]))
         handleClosed(closedValues[1], closedValues[2])
       end
     end
