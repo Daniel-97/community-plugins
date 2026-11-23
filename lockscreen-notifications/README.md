@@ -101,8 +101,9 @@ These are hidden behind **Show advanced** in the plugin settings.
   (`0.0`) for that, since a fixed height can bring back partial repaints.
 - Notifications withdrawn by their sending app (read in the app itself,
   like chat apps marking as read) leave the list: the daemon-assigned ids
-  are correlated through captured method returns, and `NotificationClosed`
-  signals with reason 3 remove the matching entry — every occurrence of
+  are correlated through captured method returns, and either the app's
+  `CloseNotification` call or a `NotificationClosed` signal with reason 3
+  removes the matching entry — every occurrence of
   the id at once, since replaced notifications (`replaces_id`) carry
   several messages under one id. Expired or user-dismissed toasts stay,
   matching Noctalia's own unread model.

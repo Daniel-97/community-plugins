@@ -11,8 +11,9 @@
 --     observable event to Noctalia's own "read" marker;
 --   * notifications withdrawn by their sending app (read in the app
 --     itself) leave the list: the daemon's assigned ids are correlated
---     through the captured method returns, and NotificationClosed
---     signals with reason 3 remove the matching entry;
+--     through the captured method returns, and either the app's
+--     CloseNotification call or a NotificationClosed signal with reason 3
+--     removes the matching entry;
 --   * the list is memory-only by design: notification content (bodies,
 --     contact names) never touches the disk, so service restarts start
 --     from an empty list. Privacy over continuity.
@@ -29,6 +30,15 @@ local items = {}
 
 local function log(msg)
   noctalia.log("[lockscreen-notifications] " .. msg)
+end
+
+-- Temporary diagnostics for the close/correlation investigation; set to
+-- false before publishing.
+local DIAG = true
+local function diag(msg)
+  if DIAG then
+    log(msg)
+  end
 end
 
 local function cfg(key, fallback)
@@ -155,6 +165,7 @@ local function handleClosed(id, reason)
       end
     end
   end
+  diag("close id=" .. tostring(id) .. " had no matching entry")
 end
 
 -- Fields are applied inside onNotification so the state snapshot it
@@ -271,18 +282,28 @@ local function handleNotifyLine(line)
   -- this, the body is dropped and the next action id ("default") is taken
   -- as the fourth string field.
   if plainStringBuf ~= nil then
-    local prefix = line:match('^(.*)"%s*$')
-    if prefix ~= nil then
-      plainStringBuf = plainStringBuf .. "\n" .. prefix
-      local value = plainStringBuf
+    -- A new message header (or an absurdly long string) means the
+    -- previous string was malformed or truncated. Drop it instead of
+    -- swallowing every following message, including close signals.
+    local header = line:find("^method call time=") or line:find("^method return time=")
+      or line:find("^signal time=") or line:find("^error time=")
+    if header or #plainStringBuf > 1048576 then
       plainStringBuf = nil
-      if msgKind == "notify" and #nStrings < 4 then
-        table.insert(nStrings, unescapeDbus(value))
-      end
+      resetMsg()
     else
-      plainStringBuf = plainStringBuf .. "\n" .. line
+      local prefix = line:match('^(.*)"%s*$')
+      if prefix ~= nil then
+        plainStringBuf = plainStringBuf .. "\n" .. prefix
+        local value = plainStringBuf
+        plainStringBuf = nil
+        if msgKind == "notify" and #nStrings < 4 then
+          table.insert(nStrings, unescapeDbus(value))
+        end
+      else
+        plainStringBuf = plainStringBuf .. "\n" .. line
+      end
+      return
     end
-    return
   end
 
   -- Header classification (order matters: specific members first).
@@ -293,9 +314,16 @@ local function handleNotifyLine(line)
     pendingSender = line:match("sender=([^ ]+)") or ""
     return
   end
+  if line:find("member=CloseNotification", 1, true) then
+    resetMsg()
+    msgKind = "closecall"
+    diag("CloseNotification method call")
+    return
+  end
   if line:find("member=NotificationClosed", 1, true) then
     resetMsg()
     msgKind = "closed"
+    diag("NotificationClosed signal")
     return
   end
   if line:find("^method return") then
@@ -328,7 +356,18 @@ local function handleNotifyLine(line)
       if item then
         item.daemonIds = item.daemonIds or {}
         table.insert(item.daemonIds, tonumber(v))
+        diag("daemon id " .. tostring(v) .. " linked")
+      else
+        diag("daemon id " .. tostring(v) .. " had no pending notification")
       end
+    end
+    return
+  end
+  if msgKind == "closecall" then
+    local v = line:match("^%s*uint32%s+(%d+)%s*$")
+    if v then
+      msgKind = nil
+      handleClosed(tonumber(v), 3)
     end
     return
   end
@@ -426,8 +465,11 @@ local function startNotifyWatch()
     end
     return
   end
+  -- Watch client CloseNotification calls as well: they carry the daemon
+  -- id directly and do not depend on the unicast NotificationClosed
+  -- signal reaching this monitor.
   noctalia.runStream(
-    'dbus-monitor --session --monitor "type=\'method_call\',interface=\'org.freedesktop.Notifications\',member=\'Notify\'" "type=\'method_return\',sender=\'org.freedesktop.Notifications\'" "type=\'signal\',interface=\'org.freedesktop.Notifications\',member=\'NotificationClosed\'"',
+    'dbus-monitor --session --monitor "type=\'method_call\',interface=\'org.freedesktop.Notifications\',member=\'Notify\'" "type=\'method_call\',interface=\'org.freedesktop.Notifications\',member=\'CloseNotification\'" "type=\'method_return\',sender=\'org.freedesktop.Notifications\'" "type=\'signal\',interface=\'org.freedesktop.Notifications\',member=\'NotificationClosed\'"',
     function(line)
       handleNotifyLine(line)
     end
