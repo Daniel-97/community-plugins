@@ -5,15 +5,19 @@
 --   * eavesdrops every org.freedesktop.Notifications.Notify call with
 --     dbus-monitor, so app name, summary and body are captured no matter
 --     the session state (locked or not);
---   * consecutive notifications with the same app and summary update the
---     last entry instead of piling up (chat apps resending);
+--   * when grouping is enabled, notifications with the same app and
+--     summary update one entry instead of piling up;
 --   * the list is cleared when the control center is opened, the closest
 --     observable event to Noctalia's own "read" marker;
 --   * notifications withdrawn by their sending app (read in the app
 --     itself) leave the list: the daemon's assigned ids are correlated
 --     through the captured method returns, and either a successful
 --     CloseNotification reply or a NotificationClosed signal with reason 3
---     removes the matching entry;
+--     queues removal after a short grace period, unless a newer message in
+--     the same app/title thread identifies it as a replacement;
+--   * apps that replace a notification by closing the old id and posting a
+--     new one keep the earlier card; ids already expired or dismissed are
+--     still removed when the app later confirms they were read;
 --   * the list is memory-only by design: notification content (bodies,
 --     contact names) never touches the disk, so service restarts start
 --     from an empty list. Privacy over continuity.
@@ -25,6 +29,8 @@
 -- keeps the two models close.
 
 local MAX_STORED = 30
+local REPLACE_WINDOW = 5
+local CLOSE_GRACE = 1
 
 local items = {}
 local reconciling = false
@@ -60,8 +66,24 @@ end
 -- ------------------------------------------------------------------
 
 local function publish()
+  -- Keep correlation and withdrawal bookkeeping private to the service;
+  -- the widget only needs the display projection.
+  local published = {}
+  for _, item in ipairs(items) do
+    table.insert(published, {
+      app = item.app,
+      summary = item.summary,
+      body = item.body,
+      icon = item.icon,
+      desktop = item.desktop,
+      urgent = item.urgent,
+      image = item.image,
+      receivedAt = item.receivedAt,
+      count = item.count,
+    })
+  end
   noctalia.state.set("notifications", {
-    items = items,
+    items = published,
     count = #items,
   })
 end
@@ -111,6 +133,7 @@ local hintDesktop = nil
 local hintUrgent = false
 local hintTransient = false
 local hintImagePath = nil
+local notifyReplacesId = nil
 local pendingSerial = nil
 local pendingSender = nil
 local pendingReplyKey = nil
@@ -125,6 +148,13 @@ local pendingBySerial = {}
 local serialQueue = {}
 local pendingCloseBySerial = {}
 local closeSerialQueue = {}
+local expectedReplacementIds = {}
+local replacementExpireAt = {}
+local replacementQueue = {}
+local replacementQueued = {}
+local inactiveIds = {}
+local inactiveQueue = {}
+local inactiveQueued = {}
 
 local function rememberSerial(serial, item)
   local key = (pendingSender or "") .. "/" .. tostring(serial)
@@ -150,41 +180,281 @@ local function rememberClose(key, id)
   end
 end
 
+-- An atomic Notify replacement reuses the same daemon id. The daemon may
+-- emit NotificationClosed for the old occurrence before returning that id
+-- for the new one; remember that this particular reason-3 close belongs to
+-- the replacement and must not delete the new card.
+local function removeQueuedId(queue, id)
+  for i = #queue, 1, -1 do
+    if queue[i] == id then
+      table.remove(queue, i)
+      return
+    end
+  end
+end
+
+local function forgetReplacement(id)
+  expectedReplacementIds[id] = nil
+  replacementExpireAt[id] = nil
+  replacementQueued[id] = nil
+  removeQueuedId(replacementQueue, id)
+end
+
+local function rememberReplacement(id)
+  if not id or id == 0 then
+    return
+  end
+  if not replacementQueued[id] then
+    replacementQueued[id] = true
+    table.insert(replacementQueue, id)
+  end
+  expectedReplacementIds[id] = (expectedReplacementIds[id] or 0) + 1
+  replacementExpireAt[id] = os.time() + CLOSE_GRACE
+  while #replacementQueue > 200 do
+    local old = table.remove(replacementQueue, 1)
+    replacementQueued[old] = nil
+    expectedReplacementIds[old] = nil
+    replacementExpireAt[old] = nil
+  end
+end
+
+local function expireReplacementMarkers()
+  local now = os.time()
+  for id, due in pairs(replacementExpireAt) do
+    if now >= due then
+      forgetReplacement(id)
+    end
+  end
+end
+
+local function forgetInactive(id)
+  inactiveIds[id] = nil
+  inactiveQueued[id] = nil
+  removeQueuedId(inactiveQueue, id)
+end
+
+local function rememberInactive(id)
+  if not inactiveQueued[id] then
+    inactiveQueued[id] = true
+    table.insert(inactiveQueue, id)
+  end
+  inactiveIds[id] = true
+  while #inactiveQueue > 200 do
+    local old = table.remove(inactiveQueue, 1)
+    inactiveQueued[old] = nil
+    inactiveIds[old] = nil
+  end
+end
+
+local function consumeReplacement(id)
+  local expected = expectedReplacementIds[id]
+  if not expected then
+    return false
+  end
+  if expected <= 1 then
+    forgetReplacement(id)
+  else
+    expectedReplacementIds[id] = expected - 1
+  end
+  return true
+end
+
+local function itemHasId(item, id)
+  local ids = type(item.daemonIds) == "table" and item.daemonIds or nil
+  if ids then
+    for _, existing in ipairs(ids) do
+      if existing == id then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+local function sameThread(a, b)
+  local aSummary = tostring(a.summary or "")
+  local bSummary = tostring(b.summary or "")
+  if aSummary == "" or aSummary ~= bSummary then
+    return false
+  end
+  local aApp = tostring(a.app or "")
+  local bApp = tostring(b.app or "")
+  if aApp ~= "" and aApp == bApp then
+    return true
+  end
+  local aDesktop = tostring(a.desktop or "")
+  local bDesktop = tostring(b.desktop or "")
+  return aDesktop ~= "" and aDesktop == bDesktop
+end
+
+local function hasRecentSameThread(item, now)
+  local itemIndex = nil
+  for i, entry in ipairs(items) do
+    if entry == item then
+      itemIndex = i
+      break
+    end
+  end
+  if not itemIndex then
+    return false
+  end
+  for i = itemIndex + 1, #items do
+    local other = items[i]
+    if sameThread(item, other) then
+      local pending = other.pendingWithdrawals
+      if not pending or next(pending) == nil then
+        local received = tonumber(other.receivedAt) or 0
+        if math.abs(now - received) <= REPLACE_WINDOW then
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+
+local function removeIdOccurrences(item, id)
+  local ids = type(item.daemonIds) == "table" and item.daemonIds or nil
+  local removed = 0
+  if ids then
+    for i = #ids, 1, -1 do
+      if ids[i] == id then
+        table.remove(ids, i)
+        removed = removed + 1
+      end
+    end
+  end
+  return removed
+end
+
+local function linkDaemonId(item, id)
+  local ids = type(item.daemonIds) == "table" and item.daemonIds or nil
+  if ids and itemHasId(item, id) and #ids >= (tonumber(item.count) or 1) then
+    return
+  end
+  forgetInactive(id)
+  -- A reused id belongs to the newest notification now. Detach it from
+  -- older separate cards so a later genuine close removes only the latest
+  -- occurrence while the earlier unread message remains in the list.
+  for _, other in ipairs(items) do
+    if other ~= item then
+      removeIdOccurrences(other, id)
+      if other.pendingWithdrawals then
+        other.pendingWithdrawals[id] = nil
+        if next(other.pendingWithdrawals) == nil then
+          other.pendingWithdrawals = nil
+        end
+      end
+    end
+  end
+  item.daemonIds = item.daemonIds or {}
+  table.insert(item.daemonIds, id)
+end
+
 local function unescapeDbus(s)
   return (s:gsub("\\n", "\n"):gsub("\\t", "\t"):gsub('\\"', '"'):gsub("\\\\", "\\"))
 end
 
--- A withdrawn notification (reason 3) leaves the list. Apps replace a
--- live notification for follow-up messages (replaces_id reuses the same
--- id), so one id can carry several occurrences: closing it withdraws
--- them all — every id occurrence goes and the group count drops by as
--- many, removing the entry when nothing is left.
+-- Notification bodies may contain the XML escaping required by the
+-- freedesktop markup subset. The widget renders plain text, so decode the
+-- standard entities first. Ampersand is decoded last so double-encoded
+-- text such as "&amp;lt;" remains literal instead of turning into markup.
+local function decodeEntities(s)
+  if not s then
+    return ""
+  end
+  s = s:gsub("&lt;", "<")
+  s = s:gsub("&gt;", ">")
+  s = s:gsub("&quot;", '"')
+  s = s:gsub("&apos;", "'")
+  s = s:gsub("&#(%d+);", function(digits)
+    local ok, char = pcall(utf8.char, tonumber(digits))
+    return ok and char or ("&#" .. digits .. ";")
+  end)
+  s = s:gsub("&#[xX](%x+);", function(hex)
+    local ok, char = pcall(utf8.char, tonumber(hex, 16))
+    return ok and char or ("&#x" .. hex .. ";")
+  end)
+  s = s:gsub("&amp;", "&")
+  return s
+end
+
+-- A reason-3 close usually means "read", but several apps implement a
+-- replacement by closing the old notification and immediately posting a
+-- new one in the same app/title thread with replaces_id=0. Keep the old
+-- card when a newer notification in that thread arrives in the replacement
+-- window; otherwise apply the withdrawal after a short grace period.
 local function handleClosed(id, reason)
   if reason ~= 3 then
+    rememberInactive(id)
+    forgetReplacement(id)
     return
   end
-  for i, item in ipairs(items) do
-    local ids = type(item.daemonIds) == "table" and item.daemonIds or nil
-    if ids then
-      local withdrawn = 0
-      for j = #ids, 1, -1 do
-        if ids[j] == id then
-          table.remove(ids, j)
-          withdrawn = withdrawn + 1
-        end
-      end
-      if withdrawn > 0 then
-        item.count = math.max(0, (tonumber(item.count) or 1) - withdrawn)
-        if item.count <= 0 then
-          table.remove(items, i)
-        end
-        log("notification " .. tostring(id) .. " withdrawn by its app (" .. withdrawn .. " occurrence(s))")
-        publish()
+  if consumeReplacement(id) then
+    diag("close id=" .. tostring(id) .. " ignored (atomic replacement)")
+    return
+  end
+  local now = os.time()
+  -- Once the daemon reported this id inactive, a later reason-3 close is
+  -- an acknowledgement (for example, read on another device). A new message
+  -- arriving at the same time must not turn that read back into a replacement.
+  local force = inactiveIds[id] == true
+  for _, item in ipairs(items) do
+    if itemHasId(item, id) then
+      if item.pendingWithdrawals and item.pendingWithdrawals[id] then
         return
       end
+      if not force and hasRecentSameThread(item, now) then
+        diag("close id=" .. tostring(id) .. " ignored (newer notification in same thread)")
+        return
+      end
+      item.pendingWithdrawals = item.pendingWithdrawals or {}
+      item.pendingWithdrawals[id] = { due = now + CLOSE_GRACE, force = force }
+      diag("close id=" .. tostring(id) .. " queued for withdrawal" .. (force and " (was inactive)" or ""))
+      return
     end
   end
   diag("close id=" .. tostring(id) .. " had no matching entry")
+end
+
+local function finishPendingWithdrawals()
+  local now = os.time()
+  local changed = false
+  for i = #items, 1, -1 do
+    local item = items[i]
+    local pending = item.pendingWithdrawals
+    if pending then
+      local itemChanged = false
+      for id, withdrawal in pairs(pending) do
+        if now >= withdrawal.due then
+          pending[id] = nil
+          if not withdrawal.force and hasRecentSameThread(item, now) then
+            diag("close id=" .. tostring(id) .. " kept (replacement notification arrived)")
+          else
+            local withdrawn = removeIdOccurrences(item, id)
+            if withdrawn > 0 then
+              item.count = math.max(0, (tonumber(item.count) or 1) - withdrawn)
+              log("notification " .. tostring(id) .. " withdrawn by its app (" .. withdrawn .. " occurrence(s))")
+              itemChanged = true
+            end
+          end
+        end
+      end
+      if next(pending) == nil then
+        item.pendingWithdrawals = nil
+      end
+      if (tonumber(item.count) or 1) <= 0 then
+        table.remove(items, i)
+        itemChanged = true
+      end
+      if itemChanged then
+        changed = true
+      end
+    end
+  end
+  if changed then
+    publish()
+  end
 end
 
 -- The line parser normally links each notification to the daemon id via
@@ -209,8 +479,8 @@ local function idInUse(id)
 end
 
 local function matchesActive(item, active)
-  return tostring(item.summary or "") == active.summary
-    and tostring(item.body or "") == active.body
+  return tostring(item.summary or "") == decodeEntities(active.summary)
+    and tostring(item.body or "") == decodeEntities(active.body)
 end
 
 local function reconcileDaemonIds()
@@ -253,34 +523,32 @@ local function reconcileDaemonIds()
       end
       local assigned = 0
       for _, entry in ipairs(active) do
-        if not idInUse(entry.id) then
-          -- Prefer the newest anonymous match so separate cards with the
-          -- same text get one id each. If every match already has an id,
-          -- append to the newest one (grouped/replaced notifications).
-          local target = nil
+        -- Prefer the newest anonymous match so separate cards with the
+        -- same text get one id each. If every match already has an id,
+        -- use the newest one for grouped/replaced notifications.
+        local target = nil
+        for i = #items, 1, -1 do
+          local item = items[i]
+          local ids = type(item.daemonIds) == "table" and item.daemonIds or nil
+          if matchesActive(item, entry) and (not ids or #ids == 0) then
+            target = item
+            break
+          end
+        end
+        if not target then
           for i = #items, 1, -1 do
             local item = items[i]
-            local ids = type(item.daemonIds) == "table" and item.daemonIds or nil
-            if matchesActive(item, entry) and (not ids or #ids == 0) then
+            if matchesActive(item, entry) then
               target = item
               break
             end
           end
-          if not target then
-            for i = #items, 1, -1 do
-              local item = items[i]
-              if matchesActive(item, entry) then
-                target = item
-                break
-              end
-            end
-          end
-          if target then
-            target.daemonIds = target.daemonIds or {}
-            table.insert(target.daemonIds, entry.id)
-            diag("daemon id " .. tostring(entry.id) .. " linked by query")
-            assigned = assigned + 1
-          end
+        end
+        local reused = target and target.replacesId == entry.id
+        if target and not itemHasId(target, entry.id) and (not idInUse(entry.id) or reused) then
+          linkDaemonId(target, entry.id)
+          diag("daemon id " .. tostring(entry.id) .. " linked by query")
+          assigned = assigned + 1
         end
       end
       if assigned > 0 then
@@ -296,6 +564,23 @@ end
 local function onNotification(app, icon, summary, body, desktop, urgent, image)
   if summary == "" and body == "" then
     return nil
+  end
+  -- A close immediately followed by a new notification in the same thread
+  -- is a replacement, not an acknowledgement. Cancel any non-forced
+  -- withdrawal still in its grace period before adding the new card.
+  local sender = { app = app, summary = summary, desktop = desktop }
+  for _, entry in ipairs(items) do
+    if entry.pendingWithdrawals and sameThread(sender, entry) then
+      for id, withdrawal in pairs(entry.pendingWithdrawals) do
+        if not withdrawal.force then
+          entry.pendingWithdrawals[id] = nil
+        end
+      end
+      if next(entry.pendingWithdrawals) == nil then
+        entry.pendingWithdrawals = nil
+      end
+      diag("replacement notification reviewed pending withdrawals")
+    end
   end
   -- Group with a previous entry with the same app and summary, wherever
   -- it sits in the list (a different notification in between must not
@@ -354,12 +639,18 @@ local function flushNotify()
   end
   msgKind = nil
   if hintTransient then
-    log("transient notification skipped (" .. tostring(nStrings[3]) .. ")")
+    log("transient notification skipped")
     return
   end
+  diag("flush replaces_id=" .. tostring(notifyReplacesId) .. " serial=" .. tostring(pendingSerial))
   local item = onNotification(
-    nStrings[1] or "", nStrings[2] or "", nStrings[3] or "", nStrings[4] or "",
+    nStrings[1] or "", nStrings[2] or "",
+    decodeEntities(nStrings[3] or ""), decodeEntities(nStrings[4] or ""),
     hintDesktop, hintUrgent, hintImagePath)
+  if item and notifyReplacesId and notifyReplacesId > 0 then
+    item.replacesId = notifyReplacesId
+    rememberReplacement(notifyReplacesId)
+  end
   if item and pendingSerial then
     diag("remember serial=" .. tostring(pendingSerial) .. " sender=" .. tostring(pendingSender))
     rememberSerial(pendingSerial, item)
@@ -389,6 +680,7 @@ local function resetMsg()
   hintUrgent = false
   hintTransient = false
   hintImagePath = nil
+  notifyReplacesId = nil
   pendingSerial = nil
   pendingSender = nil
   pendingReplyKey = nil
@@ -536,8 +828,7 @@ local function handleNotifyLine(line)
       pendingBySerial[pendingReplyKey] = nil
       msgKind = nil
       if item then
-        item.daemonIds = item.daemonIds or {}
-        table.insert(item.daemonIds, tonumber(v))
+        linkDaemonId(item, tonumber(v))
         diag("daemon id " .. tostring(v) .. " linked")
       else
         diag("daemon id " .. tostring(v) .. " had no pending notification")
@@ -568,6 +859,17 @@ local function handleNotifyLine(line)
   end
   if msgKind ~= "notify" then
     return
+  end
+
+  -- The first uint32 after app_name is Notify's replaces_id. It lets us
+  -- distinguish an atomic replacement (same daemon id) from apps that
+  -- implement replacement by closing the old id and posting a new one.
+  if notifyReplacesId == nil and #nStrings >= 1 then
+    local replaces = line:match("^%s*uint32%s+(%d+)%s*$")
+    if replaces then
+      notifyReplacesId = tonumber(replaces)
+      return
+    end
   end
 
   -- Inside the hints dict: a known key is followed by its variant value.
@@ -704,14 +1006,21 @@ local function centerOpenPoll()
     end)
 end
 
+local lastCenterPoll = 0
+
 function update()
-  noctalia.setUpdateInterval(2000)
+  noctalia.setUpdateInterval(500)
+  expireReplacementMarkers()
+  finishPendingWithdrawals()
+  local now = os.time()
   -- The control center poll spawns a short-lived `noctalia msg status`
-  -- process; skip it while there is nothing to clear.
-  if #items > 0 then
+  -- process; skip it while there is nothing to clear and run it at most
+  -- once every two seconds.
+  if #items > 0 and now - lastCenterPoll >= 2 then
+    lastCenterPoll = now
     centerOpenPoll()
   end
-  if reconcileAt and os.time() >= reconcileAt then
+  if reconcileAt and now >= reconcileAt then
     reconcileAt = nil
     reconcileDaemonIds()
   end

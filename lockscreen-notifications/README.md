@@ -118,15 +118,29 @@ These are hidden behind **Show advanced** in the plugin settings.
   like chat apps marking as read) leave the list: the daemon-assigned ids
   are correlated through captured method returns, and either a successful
   `CloseNotification` reply or a `NotificationClosed` signal with reason 3
-  removes the matching entry — every occurrence of
-  the id at once, since replaced notifications (`replaces_id`) carry
-  several messages under one id. Expired or user-dismissed toasts stay,
-  matching Noctalia's own unread model.
-- A withdrawal can only be seen while its toast is still alive: once the
-  toast expires, the daemon drops the id (a later `CloseNotification`
-  returns `NotFound` and no signal follows), so a message read in the app
-  after its toast expired keeps its entry until the list is cleared. This
-  is a property of the D-Bus notification lifecycle, not of the plugin.
+  queues removal after about one second. If a newer notification with the
+  same title and app (or desktop-entry) arrives in that window, the close is
+  treated as a replacement and the earlier card is kept. Every occurrence of
+  a genuinely closed id is removed at once. Expired or user-dismissed toasts
+  stay, matching Noctalia's own unread model.
+- A withdrawal can only be observed when the app or portal still reports
+  it: many daemons drop the id as soon as the toast expires, and a later
+  `CloseNotification` then returns `NotFound` with no signal. If no close
+  confirmation reaches the plugin, a message read after its toast expired
+  keeps its entry until the list is cleared. This is a property of the
+  D-Bus notification lifecycle, not of the plugin.
+- Some apps implement replacement by closing the previous notification
+  and immediately posting a new one with `replaces_id=0`. A close near a
+  newer notification in the same app/title thread keeps the earlier card,
+  so consecutive messages are not lost. If the closed id had already
+  expired or been dismissed, a later reason-3 close is treated as a real
+  read and removes it even when a new message arrives at the same time.
+  Atomic `replaces_id` updates also keep the earlier message: grouping off
+  leaves a separate card, while grouping on merges it only when the title
+  matches.
+- Standard XML/HTML entities in summaries and bodies (`&amp;`, `&lt;`,
+  `&gt;`, `&quot;`, `&apos;`, and numeric references) are decoded when
+  captured, so escaped text such as `&amp;` appears as `&`.
 - Transient notifications (marked so by their own app — media-player
   track changes, OSDs) are not captured: the app itself declared them
   ephemeral, so they never enter the list.
