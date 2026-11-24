@@ -11,8 +11,8 @@
 --     observable event to Noctalia's own "read" marker;
 --   * notifications withdrawn by their sending app (read in the app
 --     itself) leave the list: the daemon's assigned ids are correlated
---     through the captured method returns, and either the app's
---     CloseNotification call or a NotificationClosed signal with reason 3
+--     through the captured method returns, and either a successful
+--     CloseNotification reply or a NotificationClosed signal with reason 3
 --     removes the matching entry;
 --   * the list is memory-only by design: notification content (bodies,
 --     contact names) never touches the disk, so service restarts start
@@ -114,6 +114,7 @@ local hintImagePath = nil
 local pendingSerial = nil
 local pendingSender = nil
 local pendingReplyKey = nil
+local pendingCloseKey = nil
 
 -- Caller unique name + call serial -> item awaiting the daemon-assigned
 -- id (bounded FIFO). Serials are unique only per connection, so the key
@@ -122,6 +123,8 @@ local pendingReplyKey = nil
 -- small serial numbers.
 local pendingBySerial = {}
 local serialQueue = {}
+local pendingCloseBySerial = {}
+local closeSerialQueue = {}
 
 local function rememberSerial(serial, item)
   local key = (pendingSender or "") .. "/" .. tostring(serial)
@@ -130,6 +133,20 @@ local function rememberSerial(serial, item)
   while #serialQueue > 200 do
     local old = table.remove(serialQueue, 1)
     pendingBySerial[old] = nil
+  end
+end
+
+-- A CloseNotification call is only a request: the daemon may reject it
+-- when the toast already expired. Remember the requested id until the
+-- matching method return confirms success; Chromium, for example, cleans
+-- up old ids when posting a new notification and those failed requests
+-- must not withdraw the older card.
+local function rememberClose(key, id)
+  pendingCloseBySerial[key] = id
+  table.insert(closeSerialQueue, key)
+  while #closeSerialQueue > 200 do
+    local old = table.remove(closeSerialQueue, 1)
+    pendingCloseBySerial[old] = nil
   end
 end
 
@@ -375,6 +392,7 @@ local function resetMsg()
   pendingSerial = nil
   pendingSender = nil
   pendingReplyKey = nil
+  pendingCloseKey = nil
 end
 
 -- Known hint keys we care about, in the hints dict after the body.
@@ -459,6 +477,7 @@ local function handleNotifyLine(line)
   if line:find("^method call time=") and line:find("member=CloseNotification", 1, true) then
     resetMsg()
     msgKind = "closecall"
+    pendingCloseKey = (line:match("sender=([^ ]+)") or "") .. "/" .. tostring(tonumber(line:match("serial=(%d+)")))
     diag("CloseNotification method call")
     return
   end
@@ -466,6 +485,18 @@ local function handleNotifyLine(line)
     resetMsg()
     msgKind = "closed"
     diag("NotificationClosed signal")
+    return
+  end
+  if line:find("^error time=") then
+    local rs = tonumber(line:match("reply_serial=(%d+)"))
+    local dest = line:match("destination=([^ ]+)") or ""
+    local key = dest .. "/" .. tostring(rs)
+    local closeId = pendingCloseBySerial[key]
+    resetMsg()
+    if closeId ~= nil then
+      pendingCloseBySerial[key] = nil
+      diag("CloseNotification id=" .. tostring(closeId) .. " rejected")
+    end
     return
   end
   if line:find("^method return time=") then
@@ -477,8 +508,15 @@ local function handleNotifyLine(line)
     -- return names the original caller as its destination, which pairs
     -- with the call's sender to key the pending map.
     local key = dest .. "/" .. tostring(rs)
+    local closeId = pendingCloseBySerial[key]
+    diag("return key=" .. key .. " pending=" .. tostring(pendingBySerial[key] ~= nil))
+    if closeId ~= nil then
+      pendingCloseBySerial[key] = nil
+      diag("CloseNotification id=" .. tostring(closeId) .. " confirmed")
+      handleClosed(closeId, 3)
+      return
+    end
     local pending = pendingBySerial[key]
-    diag("return key=" .. key .. " pending=" .. tostring(pending ~= nil))
     if rs and pending then
       msgKind = "return"
       pendingReplyKey = key
@@ -511,8 +549,8 @@ local function handleNotifyLine(line)
     local v = line:match("^%s*uint32%s+(%d+)%s*$")
     if v then
       msgKind = nil
-      diag("CloseNotification id=" .. tostring(v))
-      handleClosed(tonumber(v), 3)
+      diag("CloseNotification id=" .. tostring(v) .. " awaiting daemon reply")
+      rememberClose(pendingCloseKey, tonumber(v))
     end
     return
   end
@@ -611,11 +649,12 @@ local function startNotifyWatch()
     end
     return
   end
-  -- Watch client CloseNotification calls as well: they carry the daemon
-  -- id directly and do not depend on the unicast NotificationClosed
-  -- signal reaching this monitor.
+  -- Watch client CloseNotification calls as well, but only withdraw after
+  -- the daemon's method return confirms success. A failed cleanup request
+  -- for an expired id must leave the older card in the list. The
+  -- NotificationClosed signal remains an independent withdrawal path.
   noctalia.runStream(
-    'dbus-monitor --session --monitor "type=\'method_call\',interface=\'org.freedesktop.Notifications\',member=\'Notify\'" "type=\'method_call\',interface=\'org.freedesktop.Notifications\',member=\'CloseNotification\'" "type=\'method_return\',sender=\'org.freedesktop.Notifications\'" "type=\'signal\',interface=\'org.freedesktop.Notifications\',member=\'NotificationClosed\'"',
+    'dbus-monitor --session --monitor "type=\'method_call\',interface=\'org.freedesktop.Notifications\',member=\'Notify\'" "type=\'method_call\',interface=\'org.freedesktop.Notifications\',member=\'CloseNotification\'" "type=\'method_return\',sender=\'org.freedesktop.Notifications\'" "type=\'error\',sender=\'org.freedesktop.Notifications\'" "type=\'signal\',interface=\'org.freedesktop.Notifications\',member=\'NotificationClosed\'"',
     function(line)
       handleNotifyLine(line)
     end

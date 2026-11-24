@@ -116,8 +116,8 @@ These are hidden behind **Show advanced** in the plugin settings.
   (`0.0`) for that, since a fixed height can bring back partial repaints.
 - Notifications withdrawn by their sending app (read in the app itself,
   like chat apps marking as read) leave the list: the daemon-assigned ids
-  are correlated through captured method returns, and either the app's
-  `CloseNotification` call or a `NotificationClosed` signal with reason 3
+  are correlated through captured method returns, and either a successful
+  `CloseNotification` reply or a `NotificationClosed` signal with reason 3
   removes the matching entry — every occurrence of
   the id at once, since replaced notifications (`replaces_id`) carry
   several messages under one id. Expired or user-dismissed toasts stay,
