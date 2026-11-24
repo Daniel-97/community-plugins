@@ -95,6 +95,9 @@ These are hidden behind **Show advanced** in the plugin settings.
   their own image as the leading image of the card. Inline `image-data`
   images (Signal sends the chat avatar that way) cannot be decoded in
   the plugin sandbox — no image encoder is available to plugins.
+- Cards with a real icon (the app icon or an image supplied by the app)
+  omit the app name, so the title gets the whole row; the app name is
+  shown only when the icon is missing or icons are disabled.
 - Consecutive notifications with the same app and summary are grouped
   into one entry with an occurrence count (`(2)`, `(3)`...) and the
   latest body, wherever the older entry sits in the list; a grouped

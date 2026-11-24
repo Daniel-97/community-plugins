@@ -448,11 +448,38 @@ local function render()
     local appName = displayName(item, resolveLang())
     -- Truncation keeps the head line within the title-length setting.
     local summary = truncate(item.summary, summaryLimit)
-    -- Head parts: the app name renders bold, the summary stays regular,
-    -- and the separator dot stands on its own label so the row gap
-    -- spaces it evenly from both sides.
+    -- Resolve the leading image once. A real app icon (or an image the
+    -- app provided) already identifies the sender, so it lets the title
+    -- take the whole row. The generic glyph does not, so the app name
+    -- stays visible as a fallback.
+    local iconElement
+    local hasRealIcon = false
+    if showIcons then
+      local provided = providedImagePath(item)
+      if provided then
+        -- The app shipped its own image: show it instead of the app icon.
+        iconElement = ui.image({ path = provided, width = fs(16), height = fs(16), fit = "contain" })
+        hasRealIcon = true
+      else
+        local ok, ipath = pcall(iconPathFor, item, fs(16))
+        if ok and ipath then
+          iconElement = ui.image({ path = ipath, width = fs(16), height = fs(16), fit = "contain" })
+          hasRealIcon = true
+        else
+          -- Unknown sender: generic glyph placeholder instead of no icon.
+          iconElement = ui.glyph({ name = "notification", size = fs(16), color = "on_surface_variant" })
+        end
+      end
+    end
+    -- Head parts: the app name renders bold, the summary stays semibold
+    -- as the primary line, and the separator dot stands on its own label
+    -- so the row gap spaces it evenly from both sides. With a real icon
+    -- the app name is redundant and would steal title width, so it is
+    -- only shown when the icon cannot identify the app (generic glyph or
+    -- icons disabled).
     local headParts = {}
-    if appName and appName ~= "" and summary ~= "" then
+    local showAppName = appName and appName ~= "" and summary ~= "" and not hasRealIcon
+    if showAppName then
       table.insert(headParts, ui.label({
         text = appName,
         fontSize = fs(12),
@@ -462,11 +489,32 @@ local function render()
         maxWidth = math.floor(cardWidth * 0.38),
       }))
       table.insert(headParts, ui.label({ text = " · ", fontSize = fs(12), color = "on_surface" }))
-      table.insert(headParts, ui.label({ text = summary, fontSize = fs(12), color = "on_surface", maxLines = 1, flexGrow = 1 }))
+      table.insert(headParts, ui.label({
+        text = summary,
+        fontSize = fs(12),
+        fontWeight = "semibold",
+        color = "on_surface",
+        maxLines = 1,
+        flexGrow = 1,
+      }))
     elseif summary ~= "" then
-      table.insert(headParts, ui.label({ text = summary, fontSize = fs(12), color = "on_surface", maxLines = 1, flexGrow = 1 }))
+      table.insert(headParts, ui.label({
+        text = summary,
+        fontSize = fs(12),
+        fontWeight = "semibold",
+        color = "on_surface",
+        maxLines = 1,
+        flexGrow = 1,
+      }))
     elseif (item.body or "") ~= "" then
-      table.insert(headParts, ui.label({ text = truncate(item.body, summaryLimit), fontSize = fs(12), color = "on_surface", maxLines = 1, flexGrow = 1 }))
+      table.insert(headParts, ui.label({
+        text = truncate(item.body, summaryLimit),
+        fontSize = fs(12),
+        fontWeight = "semibold",
+        color = "on_surface",
+        maxLines = 1,
+        flexGrow = 1,
+      }))
     else
       table.insert(headParts, ui.label({ text = "?", fontSize = fs(12), color = "on_surface", maxLines = 1, flexGrow = 1 }))
     end
@@ -480,24 +528,10 @@ local function render()
     -- growing spacer pins the age to the card's right edge. The body
     -- hangs below, indented past the icon.
     local headChildren = {}
-    if showIcons then
+    if showIcons and iconElement then
       -- Optical alignment: a centered text label's glyph center sits a
       -- touch lower than its box center, so a box-centered icon rides
       -- slightly high; a hairline spacer on top nudges it down to match.
-      local iconElement
-      local provided = providedImagePath(item)
-      if provided then
-        -- The app shipped its own image: show it instead of the app icon.
-        iconElement = ui.image({ path = provided, width = fs(16), height = fs(16), fit = "contain" })
-      else
-        local ok, ipath = pcall(iconPathFor, item, fs(16))
-        if ok and ipath then
-          iconElement = ui.image({ path = ipath, width = fs(16), height = fs(16), fit = "contain" })
-        else
-          -- Unknown sender: generic glyph placeholder instead of no icon.
-          iconElement = ui.glyph({ name = "notification", size = fs(16), color = "on_surface_variant" })
-        end
-      end
       table.insert(headChildren, ui.column({ gap = 0 }, {
         ui.spacer({ height = fs(3) }),
         iconElement,
