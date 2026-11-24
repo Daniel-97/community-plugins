@@ -100,7 +100,9 @@ These are hidden behind **Show advanced** in the plugin settings.
   senders get a generic glyph. Apps that send an `image-path` hint get
   their own image as the leading image of the card. Inline `image-data`
   images (Signal sends the chat avatar that way) cannot be decoded in
-  the plugin sandbox — no image encoder is available to plugins.
+  the plugin sandbox — no image encoder is available to plugins. Their
+  oversized `dbus-monitor` lines are skipped before parsing, so a large
+  avatar cannot exhaust the watcher's stream callback.
 - Cards with a real icon (the app icon or an image supplied by the app)
   omit the app name, so the title gets the whole row; the app name is
   shown only when the icon is missing or icons are disabled.

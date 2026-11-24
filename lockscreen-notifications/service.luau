@@ -404,6 +404,21 @@ local function isHeader(line)
 end
 
 local function handleNotifyLine(line)
+  -- dbus-monitor prints hint byte arrays (image-data, Signal avatars) as
+  -- one enormous line. Running the parser patterns on it can exhaust the
+  -- stream callback's CPU budget and kill the watcher. The plugin does
+  -- not use inline image-data, so drop oversized lines before parsing.
+  if #line > 8192 then
+    if plainStringBuf ~= nil then
+      diag("oversized string dropped len=" .. tostring(#plainStringBuf + #line))
+      plainStringBuf = nil
+      resetMsg()
+    else
+      diag("oversized line skipped len=" .. tostring(#line))
+    end
+    return
+  end
+
   -- A string value containing newlines is printed across several physical
   -- lines by dbus-monitor. Keep consuming until the closing quote: without
   -- this, the body is dropped and the next action id ("default") is taken
