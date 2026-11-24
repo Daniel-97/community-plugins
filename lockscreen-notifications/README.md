@@ -77,6 +77,10 @@ These are hidden behind **Show advanced** in the plugin settings.
   with `pgrep` every 30 s). Noctalia v5 keeps its own history encrypted
   with no public unread API, so this is an approximation: "received since
   the list was last cleared", not the shell's exact unread model.
+- The widget only sees notifications an application actually sends to the
+  session bus. App-internal unread badges are not readable: if a chat
+  client reconnects after suspend and marks messages unread without
+  calling `Notify`, the widget has nothing to show.
 - The list is memory-only by design: notification content (bodies,
   contact names) never touches the disk, so service restarts (plugin
   reloads, settings changes) start from an empty list. Privacy over
