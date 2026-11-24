@@ -8,7 +8,7 @@ deprecated = false
 icon = "bell"
 description = "Lockscreen/desktop widget that lists unread notifications, with app icons and relative ages."
 tags = [ "desktop", "system", "utility" ]
-dependencies = [ "dbus-monitor", "pgrep" ]
+dependencies = [ "dbus-monitor", "pgrep", "busctl" ]
 
 # Settings are shown in declaration order. Noctalia has no section/group
 # primitive, so the list is ordered by purpose (display, behaviour) and the

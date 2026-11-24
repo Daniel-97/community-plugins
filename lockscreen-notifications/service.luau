@@ -27,6 +27,8 @@
 local MAX_STORED = 30
 
 local items = {}
+local reconciling = false
+local reconcileAt = nil
 
 local function log(msg)
   noctalia.log("[lockscreen-notifications] " .. msg)
@@ -168,6 +170,108 @@ local function handleClosed(id, reason)
   diag("close id=" .. tostring(id) .. " had no matching entry")
 end
 
+-- The line parser normally links each notification to the daemon id via
+-- the Notify method return. That path is occasionally lost (a dbus-monitor
+-- line split, an interleaved message, a multi-line body). When it is, the
+-- entry stays in the list without an id and a later CloseNotification
+-- cannot find it. Ask the daemon for its active notifications and match
+-- the anonymous entries by summary/body: the id is recovered from the
+-- daemon itself instead of the stream.
+local function idInUse(id)
+  for _, item in ipairs(items) do
+    local ids = type(item.daemonIds) == "table" and item.daemonIds or nil
+    if ids then
+      for _, existing in ipairs(ids) do
+        if existing == id then
+          return true
+        end
+      end
+    end
+  end
+  return false
+end
+
+local function matchesActive(item, active)
+  return tostring(item.summary or "") == active.summary
+    and tostring(item.body or "") == active.body
+end
+
+local function reconcileDaemonIds()
+  if reconciling or #items == 0 then
+    return
+  end
+  if not noctalia.commandExists("busctl") then
+    return
+  end
+  reconciling = true
+  noctalia.runAsync(
+    "busctl --user --json=short call org.freedesktop.Notifications /org/freedesktop/Notifications org.freedesktop.Notifications GetNotifications",
+    function(result)
+      reconciling = false
+      if result.exitCode ~= 0 or type(result.stdout) ~= "string" then
+        return
+      end
+      local ok, decoded = pcall(function()
+        return noctalia.json.decode(result.stdout)
+      end)
+      if not ok or type(decoded) ~= "table" or type(decoded.data) ~= "table" then
+        return
+      end
+      local active = {}
+      for _, arr in ipairs(decoded.data) do
+        if type(arr) == "table" then
+          for _, n in ipairs(arr) do
+            if type(n) == "table" and type(n.id) == "table" then
+              local id = tonumber(n.id.data)
+              if id then
+                table.insert(active, {
+                  id = id,
+                  summary = type(n.summary) == "table" and tostring(n.summary.data or "") or "",
+                  body = type(n.body) == "table" and tostring(n.body.data or "") or "",
+                })
+              end
+            end
+          end
+        end
+      end
+      local assigned = 0
+      for _, entry in ipairs(active) do
+        if not idInUse(entry.id) then
+          -- Prefer the newest anonymous match so separate cards with the
+          -- same text get one id each. If every match already has an id,
+          -- append to the newest one (grouped/replaced notifications).
+          local target = nil
+          for i = #items, 1, -1 do
+            local item = items[i]
+            local ids = type(item.daemonIds) == "table" and item.daemonIds or nil
+            if matchesActive(item, entry) and (not ids or #ids == 0) then
+              target = item
+              break
+            end
+          end
+          if not target then
+            for i = #items, 1, -1 do
+              local item = items[i]
+              if matchesActive(item, entry) then
+                target = item
+                break
+              end
+            end
+          end
+          if target then
+            target.daemonIds = target.daemonIds or {}
+            table.insert(target.daemonIds, entry.id)
+            diag("daemon id " .. tostring(entry.id) .. " linked by query")
+            assigned = assigned + 1
+          end
+        end
+      end
+      if assigned > 0 then
+        publish()
+      end
+    end)
+end
+
 -- Fields are applied inside onNotification so the state snapshot it
 -- publishes is complete: setting the desktop hint after the internal
 -- publish used to leave the widget's copy one publish behind (no app
@@ -244,6 +348,11 @@ local function flushNotify()
     rememberSerial(pendingSerial, item)
   else
     diag("flush no item/serial item=" .. tostring(item ~= nil) .. " serial=" .. tostring(pendingSerial))
+  end
+  if item then
+    -- Give the method return a moment to arrive, then recover any id the
+    -- line parser missed from the daemon's active notification list.
+    reconcileAt = os.time() + 1
   end
 end
 
@@ -547,6 +656,10 @@ function update()
   -- process; skip it while there is nothing to clear.
   if #items > 0 then
     centerOpenPoll()
+  end
+  if reconcileAt and os.time() >= reconcileAt then
+    reconcileAt = nil
+    reconcileDaemonIds()
   end
   watchdogCheck()
 end

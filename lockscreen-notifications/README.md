@@ -14,7 +14,8 @@ rounded card over the lock backdrop.
 
 ## Requirements
 
-Install `dbus-monitor` (dbus tools) and `pgrep` (procps) on `PATH`.
+Install `dbus-monitor` (dbus tools), `pgrep` (procps), and `busctl`
+(systemd) on `PATH`.
 
 ## Usage
 
@@ -89,6 +90,11 @@ These are hidden behind **Show advanced** in the plugin settings.
   every 2 s, but only while the list has entries; the shell exposes no
   panel-open event to plugins. Besides `dbus-monitor` and the `pgrep`
   watchdog, this is the only process the service spawns.
+- When a notification's daemon id could not be linked from the `Notify`
+  method return, the service queries the daemon's active notifications
+  with `busctl ... GetNotifications` and matches them by summary/body.
+  This recovers the id from the daemon itself instead of the monitor
+  stream; daemons that do not implement the method skip this fallback.
 - App icons are resolved through `noctalia.appIconPath` (desktop-entry
   hint, then the notification's `app_icon`, then the app name); unknown
   senders get a generic glyph. Apps that send an `image-path` hint get
