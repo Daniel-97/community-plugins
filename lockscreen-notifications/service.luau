@@ -36,7 +36,7 @@ end
 
 -- Temporary diagnostics for the close/correlation investigation; set to
 -- false before publishing.
-local DIAG = true
+local DIAG = false
 local function diag(msg)
   if DIAG then
     log(msg)
