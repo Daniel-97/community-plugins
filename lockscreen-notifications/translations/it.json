@@ -42,6 +42,13 @@
       "label": "Mostra il corpo",
       "description": "Mostra il corpo della notifica sotto ogni titolo."
     },
+    "body_length": {
+      "label": "Lunghezza corpo",
+      "description": "Quanti caratteri del corpo della notifica mostrare prima del troncamento.",
+      "short": "Corto (80)",
+      "normal": "Normale (160)",
+      "long": "Lungo (240)"
+    },
     "language": {
       "label": "Lingua",
       "description": "Lingua dei testi del widget. Auto segue la lingua risolta da Noctalia (locale di sistema). Le etichette di questa pagina seguono invece la lingua della shell.",

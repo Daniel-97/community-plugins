@@ -48,6 +48,7 @@ The plugin settings UI has no section primitive, so the manifest order is what g
 | --- | --- | --- | --- |
 | `max_items` | int | 6 | Max notifications listed (in-memory cap is 30) |
 | `show_body` | bool | false | Show the body under each summary line |
+| `body_length` | select | "normal" | Body truncation: short 80, normal 160, long 240 Unicode characters |
 | `show_icons` | bool | true | Show the sender icon or the app-provided image |
 | `show_age` | bool | true | Show the age on the right of each card |
 | `summary_length` | select | "normal" | Title truncation (40/60/90 chars) and fixed widget width (≈364/442/520 px at 130%) |
@@ -95,6 +96,8 @@ These are hidden behind **Show advanced** in the plugin settings.
   with `busctl ... GetNotifications` and matches them by summary/body.
   This recovers the id from the daemon itself instead of the monitor
   stream; daemons that do not implement the method skip this fallback.
+  Replies larger than 64 KiB are skipped so inline avatars cannot exhaust
+  the callback CPU budget.
 - App icons are resolved through `noctalia.appIconPath` (desktop-entry
   hint, then the notification's `app_icon`, then the app name); unknown
   senders get a generic glyph. Apps that send an `image-path` hint get

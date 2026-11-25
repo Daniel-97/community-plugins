@@ -363,6 +363,9 @@ local function decodeEntities(s)
   if not s then
     return ""
   end
+  if not s:find("&", 1, true) then
+    return s
+  end
   s = s:gsub("&lt;", "<")
   s = s:gsub("&gt;", ">")
   s = s:gsub("&quot;", '"')
@@ -479,8 +482,8 @@ local function idInUse(id)
 end
 
 local function matchesActive(item, active)
-  return tostring(item.summary or "") == decodeEntities(active.summary)
-    and tostring(item.body or "") == decodeEntities(active.body)
+  return tostring(item.summary or "") == active.summary
+    and tostring(item.body or "") == active.body
 end
 
 local function reconcileDaemonIds()
@@ -498,6 +501,13 @@ local function reconcileDaemonIds()
       if result.exitCode ~= 0 or type(result.stdout) ~= "string" then
         return
       end
+      -- Inline image-data can make this reply hundreds of kilobytes. Decoding
+      -- that payload inside the short async callback can exhaust its CPU
+      -- budget; id recovery is best-effort, so skip oversized replies.
+      if #result.stdout > 65536 then
+        diag("GetNotifications reply too large to reconcile ids")
+        return
+      end
       local ok, decoded = pcall(function()
         return noctalia.json.decode(result.stdout)
       end)
@@ -513,8 +523,8 @@ local function reconcileDaemonIds()
               if id then
                 table.insert(active, {
                   id = id,
-                  summary = type(n.summary) == "table" and tostring(n.summary.data or "") or "",
-                  body = type(n.body) == "table" and tostring(n.body.data or "") or "",
+                  summary = decodeEntities(type(n.summary) == "table" and tostring(n.summary.data or "") or ""),
+                  body = decodeEntities(type(n.body) == "table" and tostring(n.body.data or "") or ""),
                 })
               end
             end

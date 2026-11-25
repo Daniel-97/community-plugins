@@ -124,6 +124,18 @@ local function truncate(s, n)
   if #s <= n then
     return s
   end
+  -- Count Unicode code points rather than bytes so an emoji or accented
+  -- character is never cut in half at the limit.
+  local ok, length = pcall(utf8.len, s)
+  if ok and length and length <= n then
+    return s
+  end
+  if ok and length then
+    local boundary = utf8.offset(s, n)
+    if boundary then
+      return string.sub(s, 1, boundary - 1) .. "…"
+    end
+  end
   return string.sub(s, 1, n - 1) .. "…"
 end
 
@@ -393,6 +405,13 @@ local function render()
     widthBase = 400
   end
   local cardWidth = fs(widthBase)
+  local bodyMode = tostring(cfg("body_length", "normal"))
+  local bodyLimit = 160
+  if bodyMode == "short" then
+    bodyLimit = 80
+  elseif bodyMode == "long" then
+    bodyLimit = 240
+  end
 
   if count == 0 then
     -- Empty state: keep the widget visible (dimmed) so its presence is
@@ -561,7 +580,7 @@ local function render()
     if hasBody then
       table.insert(cardChildren, ui.column({ paddingH = showIcons and fs(21) or fs(4) }, {
         ui.label({
-          text = item.body,
+          text = truncate(item.body, bodyLimit),
           fontSize = fs(11),
           color = "on_surface_variant",
           maxWidth = math.max(fs(140), cardWidth - fs(60)),

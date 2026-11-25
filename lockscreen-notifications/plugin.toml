@@ -29,6 +29,19 @@ description_key = "settings.show_body.description"
 default = false
 
 [[setting]]
+key = "body_length"
+type = "select"
+label_key = "settings.body_length.label"
+description_key = "settings.body_length.description"
+default = "normal"
+options = [
+  { value = "short", label_key = "settings.body_length.short" },
+  { value = "normal", label_key = "settings.body_length.normal" },
+  { value = "long", label_key = "settings.body_length.long" },
+]
+visible_when = { key = "show_body", values = [ "true" ] }
+
+[[setting]]
 key = "show_icons"
 type = "bool"
 label_key = "settings.show_icons.label"

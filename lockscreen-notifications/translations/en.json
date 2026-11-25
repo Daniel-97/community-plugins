@@ -42,6 +42,13 @@
       "label": "Show body",
       "description": "Show the notification body under each summary line."
     },
+    "body_length": {
+      "label": "Body length",
+      "description": "How many characters of the notification body are shown before truncation.",
+      "short": "Short (80)",
+      "normal": "Normal (160)",
+      "long": "Long (240)"
+    },
     "language": {
       "label": "Language",
       "description": "Language of the widget texts. Auto follows Noctalia's resolved language (system locale). This page's labels follow the shell language instead.",
